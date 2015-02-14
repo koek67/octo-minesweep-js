@@ -6,17 +6,16 @@
 *
 * Board will have three 2D arrays that will act as layers:
 *
-*  bomb-board - the locations of all the bombs
-*  click-board - the places the user has clicked
-*  flag-board - the places a flag has been placed
-*  bomb-num-board - the the number of bomb neighbors for each location
+*  bombs - the locations of all the bombs
+*  buttons - the places the user has clicked
+*  flags - the places a flag has been placed
+*  bombNums - the the number of bomb neighbors for each location
 *
 * Board will handle all the logic of the minesweeper game using these layers
 * and it will update thse layers everytime a user buttons on a location on the
 * game board.
 *
 */
-
 function Board () {
 
     // set the difficulty to intermedite
@@ -32,13 +31,19 @@ function Board () {
     this.flags = [[]];
     this.bombNums =[[]];
 
+    // properties of the game
     this.endGame = false;
     this.win = true;
 
+    /**
+     * init() will initialize a Minesweeper game given no information at all
+     * The function will fill the flag and button layers as these layers do
+     * not need any prior information to be filled. The bombs layer cannot
+     * be filled because it requires the first click of the user.
+     */
     this.init = function() {
         fillButtons();
         fillFlags();
-
     }
 
     this.fillbuttons = function() {
@@ -104,20 +109,20 @@ function Board () {
 
                 }
 
-            }
+    }
 
-            this.getNeighbors = function(var x, var y) {
-                var points = [[]];
-                var count = 0;
-                for (var i = -1; i < 1; i++) {
-                    for (var j = -1; j < 1; i++) {
-                        if (isLegal(x + i, y + j)) {
-                            points[count][0] = x + i;
-                            points[count][1] = y + j;
-                        }
-                    }
+    this.getNeighbors = function(var x, var y) {
+        var points = [[]];
+        var count = 0;
+        for (var i = -1; i < 1; i++) {
+            for (var j = -1; j < 1; i++) {
+                if (isLegal(x + i, y + j)) {
+                    points[count][0] = x + i;
+                    points[count][1] = y + j;
                 }
-                return points;
             }
-
         }
+        return points;
+        }
+
+}
