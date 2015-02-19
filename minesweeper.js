@@ -1,356 +1,321 @@
-/**
- * Created by koushikkrishnan on 2/15/15.
- */
-/*** @jsx React.DOM */
-var board = new Board();
-board.init();
-/**
- * Class Rectagle
- * A rectangle will represent one square in the minesweeper board. It has an
- * onClick function that will change its state to be clicked or unclicked and
- * will interact with Board and let it know when a certain element has been
- * clicked.
- */
-var Rectangle = React.createClass({
-    getInitialState: function() {
-        return {fill: "transparent"};
-    },
-    getBoardX: function(xLoc) {
-        var x = xLoc - 30;
-        x = x / 40;
-        return x;
-    },
-    getBoardY: function(yLoc) {
-        var y = yLoc - 30;
-        y = y / 40;
-        return y;
-    },
-    /**
-     * The ultimate event handler!!
-     *
-     * Case: first click
-     *      - register the click
-     *      - fill the rest of the board with bombs
-     * Case: normal left-click
-     *      - register the click
-     *      - check if bomb exists there
-     *          - true: game over
+/** @jsx React.DOM */
 
+var SCALE = 60;
+/*
+The MineSweeper component is the overarching component. It holds all
+the Tiles and stores information about the game itself. This includes the
+number of mines, number of bombs etc.
 
-     WHAT TO DO:
-     - have Runner handle the clicks -> make edits to the board
-     - Rectangles will have 2 properties: row and col
-     - they will figure what to display
-     */
-    handleClick: function() {
-        if (board.firstClick) {
-            var xLoc = this.props.x;
-            var yLoc = this.props.y;
-            board.fillBombs( this.getBoardX(xLoc), this.getBoardY(yLoc) );
-            board.firstClick = true;
-        } else {
-            this.setState({fill: "black"});
+The minesweeper component also has functions specific to the minesweeper game
+like methods that modify grid every time a user clicks on the board.
+ */
+var MineSweeper = React.createClass({
+    timer: null,
+    getInitialState: function(customState){
+        clearInterval(this.timer);
+
+        var state; // state will hold all the data of a minesweeper board
+            state = {
+                gridWidth: 10,
+                gridHeight: 10,
+                mineCount: 10,
+                bestTime: 999,
+                hue: Math.floor(Math.random()*360)};
+
+        state.time = null;
+        /*
+        fill in the grid with mine objects
+         */
+        var grid = [];
+        for (var i = 0; i < state.gridHeight; i++){
+            var tileRow = [];
+            for (var j = 0; j < state.gridWidth; j++){
+                tileRow.push({ mine: false, status: 'default' });
+            }
+            grid.push(tileRow);
         }
+        state.grid = grid;
+
+        return state;
     },
+    /*
+    the render function will draw each tile using the data in grid[][]
+
+     */
     render: function() {
-        return (
-            <rect x={this.props.x} y={this.props.y} width="40" height="40" stroke="red" fill={this.state.fill} strokeWidth="5" />
-        )
+        var self = this;
+        var tiles = this.state.grid.map(function(tileRow, i){
+            var tileRow = tileRow.map(function(tile, j){
+                var displayCode = '';
+                if (tile.status == 'revealed'){
+                    if (tile.mine){
+                        displayCode = 'X';
+                    } else {
+                        displayCode = self.nearbyMineCount({y:i, x:j});
+                        var nearbyFlaggedCount = self.nearbyFlaggedCount({y:i, x:j});
+                        if (nearbyFlaggedCount > displayCode){
+                            displayCode += '!';
+                        }
+                    }
+                } else if (self.checkLoss() && tile.mine){
+                    displayCode = '*';
+                } else if (self.checkWin()){
+                    displayCode = '$';
+                } else if (tile.status == 'flagged'){
+                    displayCode = '!';
+                } else if (tile.status == 'maybe'){
+                    displayCode = '?';
+                } else {
+                    displayCode = '';
+                }
+                return <Tile mine={tile.mine} displayCode={displayCode} x={j} y={i} key={i+'.'+j}
+                    onTileClick={self.handleTileClick} onTileRightClick={self.handleTileRightClick} onTileShiftClick={self.handleTileShiftClick}/>;
+            });
+            return <g key={i}>{tileRow}</g>;
+        });
+
+        var concealedTileCount = _.chain(this.state.grid).flatten().filter(function(tile){ return tile.status !='revealed'; }).value().length;
+
+        return <div>
+            <div>Time: {this.state.time || '0'} seconds&nbsp;&nbsp;</div>
+            <div>Mines Remaining: {this.unflaggedMineCount()}&nbsp;&nbsp;</div>
+            <div>Best Time: {this.state.bestTime} seconds&nbsp;&nbsp;</div>
+            <br/>
+            <svg height={this.state.grid.length*SCALE} width={this.state.grid[0].length*SCALE}>
+    {tiles}
+            </svg>
+            <br/>
+            <div>Right-Click to mark as mine. Shift-Click to clear adjacent unmarked tiles.</div>
+        </div>;
+    },
+    handleTileClick: function(e){
+        if (this.checkLoss() || this.checkWin() || this.state.grid[e.y][e.x].status == 'flagged'){
+            return;
+        }
+
+        // if first click of the game (no revealed tiles yet), randomly generate mines, excluding a 3x3 section around the clicked tile (to avoid a crappy start)
+        if (!_.chain(this.state.grid).flatten().pluck('status').contains('revealed').value()){
+            for (var i = 0; i < this.state.mineCount; i ++){
+                var randY = e.y;
+                var randX = e.x;
+                while ((e.y - 1 <= randY && randY <= e.y + 1 && e.x - 1 <= randX && randX <= e.x + 1) || this.state.grid[randY][randX].mine){
+                    randY = Math.floor(Math.random() * this.state.grid.length);
+                    randX = Math.floor(Math.random() * this.state.grid[0].length);
+                }
+                this.state.grid[randY][randX].mine = true;
+            }
+        }
+
+        this.clearNearbyTiles(e);
+    },
+    handleTileRightClick: function(e){
+        if (this.state.grid[e.y][e.x].status == 'revealed' || this.checkLoss() || this.checkWin()){
+            return;
+        }
+        var status = this.state.grid[e.y][e.x].status;
+        if (status == 'flagged'){
+            if (this.refs.maybeEnabled.getDOMNode().checked){
+                this.state.grid[e.y][e.x].status = 'maybe';
+            } else {
+                this.state.grid[e.y][e.x].status = 'default';
+            }
+        } else if (status == 'maybe'){
+            this.state.grid[e.y][e.x].status = 'default';
+        } else {
+            this.state.grid[e.y][e.x].status = 'flagged';
+        }
+        this.forceUpdate();
+    },
+    handleTileShiftClick: function(coord){
+        if (this.state.grid[coord.y][coord.x].status != 'revealed' || this.checkLoss() || this.checkWin()){
+            return;
+        }
+
+        var flaggedCount = 0;
+        for(var i = coord.y - 1; i <= coord.y + 1; i ++){
+            for(var j = coord.x - 1; j <= coord.x + 1; j++){
+                if (i >= 0 && j >= 0 && i < this.state.grid.length && j < this.state.grid[0].length && this.state.grid[i][j].status == 'flagged'){
+                    flaggedCount++;
+                }
+            }
+        }
+        if (this.nearbyMineCount(coord) == flaggedCount){
+            for(var i = coord.y - 1; i <= coord.y + 1; i ++){
+                for(var j = coord.x - 1; j <= coord.x + 1; j++){
+                    if (i >= 0 && j >= 0 && i < this.state.grid.length && j < this.state.grid[0].length && this.state.grid[i][j].status != 'flagged'){
+                        this.clearNearbyTiles({y:i, x:j});
+                    }
+                }
+            }
+        }
+        this.forceUpdate();
+    },
+    mineCount: function(){
+        return _.chain(this.state.grid).flatten().where({ mine: true }).value().length;
+    },
+    unflaggedMineCount: function(){
+        if (this.checkWin()){
+            return 0;
+        }
+        var flaggedTiles = _.chain(this.state.grid).flatten().where({ status: 'flagged' }).value().length;
+        return this.mineCount() - flaggedTiles;
+    },
+    nearbyMineCount: function(coord){
+        var mineCount = 0;
+        for(var i = coord.y - 1; i <= coord.y + 1; i ++){
+            for(var j = coord.x - 1; j <= coord.x + 1; j++){
+                if (i >= 0 && j >= 0 && i < this.state.grid.length && j < this.state.grid[0].length && this.state.grid[i][j].mine){
+                    mineCount++;
+                }
+            }
+        }
+        return mineCount;
+    },
+    nearbyFlaggedCount: function(coord){
+        var flaggedCount = 0;
+        for(var i = coord.y - 1; i <= coord.y + 1; i ++){
+            for(var j = coord.x - 1; j <= coord.x + 1; j++){
+                if (i >= 0 && j >= 0 && i < this.state.grid.length && j < this.state.grid[0].length && this.state.grid[i][j].status == 'flagged'){
+                    flaggedCount++;
+                }
+            }
+        }
+        return flaggedCount;
+    },
+    clearNearbyTiles: function(coord){
+        this.state.grid[coord.y][coord.x].status = 'revealed';
+        if (this.nearbyMineCount(coord) == 0){
+            for(var i = coord.y - 1; i <= coord.y + 1; i ++){
+                for(var j = coord.x - 1; j <= coord.x + 1; j++){
+                    if (i >= 0 && j >= 0 && i < this.state.grid.length && j < this.state.grid[0].length && this.state.grid[i][j].status != 'revealed'){
+                        this.clearNearbyTiles({y:i, x:j});
+                    }
+                }
+            }
+        }
+
+        if (this.state.time == null){
+            this.state.time = 0;
+            this.timer = setInterval(function(){
+                this.setState({ time: this.state.time + 1 });
+            }.bind(this), 1000);
+        }
+
+        if (this.checkLoss()){
+            clearInterval(this.timer);
+        }
+        if (this.checkWin()){
+            clearInterval(this.timer);
+            if (this.state.time < this.state.bestTime){
+                this.state.bestTime = this.state.time;
+            }
+        }
+
+        this.forceUpdate();
+    },
+    checkLoss: function(){
+        return _.chain(this.state.grid).flatten().some(function(tile){ return (tile.mine && tile.status == 'revealed') }).value();
+    },
+    checkWin: function(){
+        return _.chain(this.state.grid).flatten().every(function(tile){
+            return (tile.status == 'revealed' && !tile.mine) || (tile.status != 'revealed' && tile.mine);
+        }).value();
+    },
+    handleNewGameClick: function(e){
+        var newGame = {};
+        newGame.gridWidth = this.refs.width.getDOMNode().value;
+        newGame.gridHeight = this.refs.height.getDOMNode().value;
+        newGame.mineCount = this.refs.mines.getDOMNode().value;
+        this.setState(this.getInitialState(newGame));
+    },
+    handleHueBarClick: function(hue){
+        this.setState({ hue: hue });
     }
 });
 
-var Runner = React.createClass({
-    getInitialState: function() {
-        return {
-            xLoc: "transparent"
-        };
+/*
+Tile represent one element in the minesweeper board. It is rendered using the
+data in the minesweeper grid and its display is customized using its properties
+of color, location, and onClick functions
+ */
+var Tile = React.createClass({
+    getDefaultProps: function(){
+        return { mine: false, displayCode: '', x: 0, y: 0, hue: 180, onTileClick: function(){}, onTileRightClick: function(){}, onTileShiftClick: function(){} };
     },
-    getBoardX: function(xLoc) {
-        var x = xLoc - 30;
-        x = x / 40;
-        return Math.floor(x);
+    getInitialState: function(){
+        return { hovering: false };
     },
-    getBoardY: function(yLoc) {
-        var y = yLoc - 30;
-        y = y / 40;
-        return Math.floor(y);
-    },
-    handleClick: function(event) {
-        // retrive location in board
-        var row = this.getBoardX(event.clientY);
-        var col = this.getBoardY(event.clientX);
+    render: function(){
+        var hue = 0;
+        var lightness = 0;
+        var anim = false;
+        switch (this.props.displayCode){
+            case '': case '!': case '?': case '$':
+            hue = this.props.hue;
+            lightness = 60;
+            break;
+            case 'X': case '*':
+            hue = (this.props.hue + 180) % 360;
+            lightness = 60;
+            break;
+            default:
+                hue = this.props.hue;
+                lightness = 40;
+        }
+        if (this.state.hovering){
+            //lightness += 30; // deactivated...more distracting than helpful
+        }
 
+        return <g>
+            <rect x={this.props.x*SCALE} y={this.props.y*SCALE} height={SCALE} width={SCALE}
+                onClick={this.handleClick} onContextMenu={this.handleContextMenu}
+                onMouseOver={this.handleMouseOver} onMouseOut={this.handleMouseOut}
+                fill={'hsl(' + hue + ',50%,' + lightness + '%)'} stroke={'hsl(' + hue + ',50%,20%)'} ref='rect' />
+            <text x={(this.props.x+0.5)*SCALE} y={(this.props.y+0.7)*SCALE} textAnchor='middle' fill='white'
+                onClick={this.handleClick} onContextMenu={this.handleContextMenu}
+                onMouseOver={this.handleMouseOver} onMouseOut={this.handleMouseOut}>
+                {this.props.displayCode != 0? this.props.displayCode: ''}
+            </text>
+        </g>;
     },
-    render: function() {
-        /**
-         * NOTE:
-         * The following values were generated by a python script. This is
-         * my first time using ReactJS and I know there MUST be a better way
-         * to this.
-         *
-         * I just didn't know how to do it any other way.
-         */
-        return (
-            <svg width="700" height="700" version="1.1" xmlns="http://www.w3.org/2000/svg" onClick={this.handleClick}>
-                <Rectangle x="30" y="30" />
-                <Rectangle x="30" y="70" />
-                <Rectangle x="30" y="110" />
-                <Rectangle x="30" y="150" />
-                <Rectangle x="30" y="190" />
-                <Rectangle x="30" y="230" />
-                <Rectangle x="30" y="270" />
-                <Rectangle x="30" y="310" />
-                <Rectangle x="30" y="350" />
-                <Rectangle x="30" y="390" />
-                <Rectangle x="30" y="430" />
-                <Rectangle x="30" y="470" />
-                <Rectangle x="30" y="510" />
-                <Rectangle x="30" y="550" />
-                <Rectangle x="30" y="590" />
-                <Rectangle x="30" y="630" />
-                <Rectangle x="70" y="30" />
-                <Rectangle x="70" y="70" />
-                <Rectangle x="70" y="110" />
-                <Rectangle x="70" y="150" />
-                <Rectangle x="70" y="190" />
-                <Rectangle x="70" y="230" />
-                <Rectangle x="70" y="270" />
-                <Rectangle x="70" y="310" />
-                <Rectangle x="70" y="350" />
-                <Rectangle x="70" y="390" />
-                <Rectangle x="70" y="430" />
-                <Rectangle x="70" y="470" />
-                <Rectangle x="70" y="510" />
-                <Rectangle x="70" y="550" />
-                <Rectangle x="70" y="590" />
-                <Rectangle x="70" y="630" />
-                <Rectangle x="110" y="30" />
-                <Rectangle x="110" y="70" />
-                <Rectangle x="110" y="110" />
-                <Rectangle x="110" y="150" />
-                <Rectangle x="110" y="190" />
-                <Rectangle x="110" y="230" />
-                <Rectangle x="110" y="270" />
-                <Rectangle x="110" y="310" />
-                <Rectangle x="110" y="350" />
-                <Rectangle x="110" y="390" />
-                <Rectangle x="110" y="430" />
-                <Rectangle x="110" y="470" />
-                <Rectangle x="110" y="510" />
-                <Rectangle x="110" y="550" />
-                <Rectangle x="110" y="590" />
-                <Rectangle x="110" y="630" />
-                <Rectangle x="150" y="30" />
-                <Rectangle x="150" y="70" />
-                <Rectangle x="150" y="110" />
-                <Rectangle x="150" y="150" />
-                <Rectangle x="150" y="190" />
-                <Rectangle x="150" y="230" />
-                <Rectangle x="150" y="270" />
-                <Rectangle x="150" y="310" />
-                <Rectangle x="150" y="350" />
-                <Rectangle x="150" y="390" />
-                <Rectangle x="150" y="430" />
-                <Rectangle x="150" y="470" />
-                <Rectangle x="150" y="510" />
-                <Rectangle x="150" y="550" />
-                <Rectangle x="150" y="590" />
-                <Rectangle x="150" y="630" />
-                <Rectangle x="190" y="30" />
-                <Rectangle x="190" y="70" />
-                <Rectangle x="190" y="110" />
-                <Rectangle x="190" y="150" />
-                <Rectangle x="190" y="190" />
-                <Rectangle x="190" y="230" />
-                <Rectangle x="190" y="270" />
-                <Rectangle x="190" y="310" />
-                <Rectangle x="190" y="350" />
-                <Rectangle x="190" y="390" />
-                <Rectangle x="190" y="430" />
-                <Rectangle x="190" y="470" />
-                <Rectangle x="190" y="510" />
-                <Rectangle x="190" y="550" />
-                <Rectangle x="190" y="590" />
-                <Rectangle x="190" y="630" />
-                <Rectangle x="230" y="30" />
-                <Rectangle x="230" y="70" />
-                <Rectangle x="230" y="110" />
-                <Rectangle x="230" y="150" />
-                <Rectangle x="230" y="190" />
-                <Rectangle x="230" y="230" />
-                <Rectangle x="230" y="270" />
-                <Rectangle x="230" y="310" />
-                <Rectangle x="230" y="350" />
-                <Rectangle x="230" y="390" />
-                <Rectangle x="230" y="430" />
-                <Rectangle x="230" y="470" />
-                <Rectangle x="230" y="510" />
-                <Rectangle x="230" y="550" />
-                <Rectangle x="230" y="590" />
-                <Rectangle x="230" y="630" />
-                <Rectangle x="270" y="30" />
-                <Rectangle x="270" y="70" />
-                <Rectangle x="270" y="110" />
-                <Rectangle x="270" y="150" />
-                <Rectangle x="270" y="190" />
-                <Rectangle x="270" y="230" />
-                <Rectangle x="270" y="270" />
-                <Rectangle x="270" y="310" />
-                <Rectangle x="270" y="350" />
-                <Rectangle x="270" y="390" />
-                <Rectangle x="270" y="430" />
-                <Rectangle x="270" y="470" />
-                <Rectangle x="270" y="510" />
-                <Rectangle x="270" y="550" />
-                <Rectangle x="270" y="590" />
-                <Rectangle x="270" y="630" />
-                <Rectangle x="310" y="30" />
-                <Rectangle x="310" y="70" />
-                <Rectangle x="310" y="110" />
-                <Rectangle x="310" y="150" />
-                <Rectangle x="310" y="190" />
-                <Rectangle x="310" y="230" />
-                <Rectangle x="310" y="270" />
-                <Rectangle x="310" y="310" />
-                <Rectangle x="310" y="350" />
-                <Rectangle x="310" y="390" />
-                <Rectangle x="310" y="430" />
-                <Rectangle x="310" y="470" />
-                <Rectangle x="310" y="510" />
-                <Rectangle x="310" y="550" />
-                <Rectangle x="310" y="590" />
-                <Rectangle x="310" y="630" />
-                <Rectangle x="350" y="30" />
-                <Rectangle x="350" y="70" />
-                <Rectangle x="350" y="110" />
-                <Rectangle x="350" y="150" />
-                <Rectangle x="350" y="190" />
-                <Rectangle x="350" y="230" />
-                <Rectangle x="350" y="270" />
-                <Rectangle x="350" y="310" />
-                <Rectangle x="350" y="350" />
-                <Rectangle x="350" y="390" />
-                <Rectangle x="350" y="430" />
-                <Rectangle x="350" y="470" />
-                <Rectangle x="350" y="510" />
-                <Rectangle x="350" y="550" />
-                <Rectangle x="350" y="590" />
-                <Rectangle x="350" y="630" />
-                <Rectangle x="390" y="30" />
-                <Rectangle x="390" y="70" />
-                <Rectangle x="390" y="110" />
-                <Rectangle x="390" y="150" />
-                <Rectangle x="390" y="190" />
-                <Rectangle x="390" y="230" />
-                <Rectangle x="390" y="270" />
-                <Rectangle x="390" y="310" />
-                <Rectangle x="390" y="350" />
-                <Rectangle x="390" y="390" />
-                <Rectangle x="390" y="430" />
-                <Rectangle x="390" y="470" />
-                <Rectangle x="390" y="510" />
-                <Rectangle x="390" y="550" />
-                <Rectangle x="390" y="590" />
-                <Rectangle x="390" y="630" />
-                <Rectangle x="430" y="30" />
-                <Rectangle x="430" y="70" />
-                <Rectangle x="430" y="110" />
-                <Rectangle x="430" y="150" />
-                <Rectangle x="430" y="190" />
-                <Rectangle x="430" y="230" />
-                <Rectangle x="430" y="270" />
-                <Rectangle x="430" y="310" />
-                <Rectangle x="430" y="350" />
-                <Rectangle x="430" y="390" />
-                <Rectangle x="430" y="430" />
-                <Rectangle x="430" y="470" />
-                <Rectangle x="430" y="510" />
-                <Rectangle x="430" y="550" />
-                <Rectangle x="430" y="590" />
-                <Rectangle x="430" y="630" />
-                <Rectangle x="470" y="30" />
-                <Rectangle x="470" y="70" />
-                <Rectangle x="470" y="110" />
-                <Rectangle x="470" y="150" />
-                <Rectangle x="470" y="190" />
-                <Rectangle x="470" y="230" />
-                <Rectangle x="470" y="270" />
-                <Rectangle x="470" y="310" />
-                <Rectangle x="470" y="350" />
-                <Rectangle x="470" y="390" />
-                <Rectangle x="470" y="430" />
-                <Rectangle x="470" y="470" />
-                <Rectangle x="470" y="510" />
-                <Rectangle x="470" y="550" />
-                <Rectangle x="470" y="590" />
-                <Rectangle x="470" y="630" />
-                <Rectangle x="510" y="30" />
-                <Rectangle x="510" y="70" />
-                <Rectangle x="510" y="110" />
-                <Rectangle x="510" y="150" />
-                <Rectangle x="510" y="190" />
-                <Rectangle x="510" y="230" />
-                <Rectangle x="510" y="270" />
-                <Rectangle x="510" y="310" />
-                <Rectangle x="510" y="350" />
-                <Rectangle x="510" y="390" />
-                <Rectangle x="510" y="430" />
-                <Rectangle x="510" y="470" />
-                <Rectangle x="510" y="510" />
-                <Rectangle x="510" y="550" />
-                <Rectangle x="510" y="590" />
-                <Rectangle x="510" y="630" />
-                <Rectangle x="550" y="30" />
-                <Rectangle x="550" y="70" />
-                <Rectangle x="550" y="110" />
-                <Rectangle x="550" y="150" />
-                <Rectangle x="550" y="190" />
-                <Rectangle x="550" y="230" />
-                <Rectangle x="550" y="270" />
-                <Rectangle x="550" y="310" />
-                <Rectangle x="550" y="350" />
-                <Rectangle x="550" y="390" />
-                <Rectangle x="550" y="430" />
-                <Rectangle x="550" y="470" />
-                <Rectangle x="550" y="510" />
-                <Rectangle x="550" y="550" />
-                <Rectangle x="550" y="590" />
-                <Rectangle x="550" y="630" />
-                <Rectangle x="590" y="30" />
-                <Rectangle x="590" y="70" />
-                <Rectangle x="590" y="110" />
-                <Rectangle x="590" y="150" />
-                <Rectangle x="590" y="190" />
-                <Rectangle x="590" y="230" />
-                <Rectangle x="590" y="270" />
-                <Rectangle x="590" y="310" />
-                <Rectangle x="590" y="350" />
-                <Rectangle x="590" y="390" />
-                <Rectangle x="590" y="430" />
-                <Rectangle x="590" y="470" />
-                <Rectangle x="590" y="510" />
-                <Rectangle x="590" y="550" />
-                <Rectangle x="590" y="590" />
-                <Rectangle x="590" y="630" />
-                <Rectangle x="630" y="30" />
-                <Rectangle x="630" y="70" />
-                <Rectangle x="630" y="110" />
-                <Rectangle x="630" y="150" />
-                <Rectangle x="630" y="190" />
-                <Rectangle x="630" y="230" />
-                <Rectangle x="630" y="270" />
-                <Rectangle x="630" y="310" />
-                <Rectangle x="630" y="350" />
-                <Rectangle x="630" y="390" />
-                <Rectangle x="630" y="430" />
-                <Rectangle x="630" y="470" />
-                <Rectangle x="630" y="510" />
-                <Rectangle x="630" y="550" />
-                <Rectangle x="630" y="590" />
-                <Rectangle x="630" y="630" />
-            </svg>
-        )
-    }
-})
+    componentDidUpdate: function(){
+        switch (this.props.displayCode) {
+            case '$': // randomly stagger animation on win (looks more winny)
+                setTimeout(function(){
+                    switch (this.props.displayCode) {
+                        case '$':
+                            this.refs.rect.getDOMNode().classList.add('anim');
+                            break;
+                    }
+                }.bind(this), Math.random()*1200);
+                break;
+            case 'X': case '*': // simultaneous animation on loss
+            this.refs.rect.getDOMNode().classList.add('anim');
+            break;
+            default:
+                this.refs.rect.getDOMNode().classList.remove('anim');
+        }
+    },
+    componentWillUnmount: function(){
+        this.refs.rect.getDOMNode().classList.remove('anim');
+    },
+    handleClick: function(e){
+        if (e.nativeEvent.shiftKey){
+            this.props.onTileShiftClick({x: this.props.x, y: this.props.y});
+        } else {
+            this.props.onTileClick({x: this.props.x, y: this.props.y});
+        }
+        return false;
+    },
+    handleContextMenu: function(){
+        this.props.onTileRightClick({x: this.props.x, y: this.props.y});
+        return false;
+    },
 
-React.renderComponent(<Runner />, document.getElementById("content"));
+});
+
+
+
+
+
+React.renderComponent(<MineSweeper />, document.body);
