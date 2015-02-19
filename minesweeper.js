@@ -24,7 +24,7 @@ var MineSweeper = React.createClass({
 
         state.time = null;
         /*
-        fill in the grid with mine objects
+        fill in the grid with mine objects with default status
          */
         var grid = [];
         for (var i = 0; i < state.gridHeight; i++){
