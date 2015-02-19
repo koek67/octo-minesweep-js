@@ -79,7 +79,6 @@ var MineSweeper = React.createClass({
         return <div>
             <div>Time: {this.state.time || '0'} seconds&nbsp;&nbsp;</div>
             <div>Mines Remaining: {this.unflaggedMineCount()}&nbsp;&nbsp;</div>
-            <div>Best Time: {this.state.bestTime} seconds&nbsp;&nbsp;</div>
             <br/>
             <svg height={this.state.grid.length*SCALE} width={this.state.grid[0].length*SCALE}>
     {tiles}
