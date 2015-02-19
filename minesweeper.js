@@ -309,7 +309,7 @@ var Tile = React.createClass({
     handleContextMenu: function(){
         this.props.onTileRightClick({x: this.props.x, y: this.props.y});
         return false;
-    },
+    }
 
 });
 
